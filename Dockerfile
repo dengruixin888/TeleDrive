@@ -9,7 +9,8 @@ COPY shared ./shared
 COPY server ./server
 
 ENV GRADLE_OPTS="-Xmx1024m -XX:MaxMetaspaceSize=384m"
-RUN chmod +x gradlew && \
+RUN --mount=type=cache,target=/root/.gradle \
+    chmod +x gradlew && \
     ./gradlew :server:installDist -PtdlightNativesOs=linux -Dkotlin.compiler.execution.strategy=in-process --no-daemon --max-workers=2
 
 FROM eclipse-temurin:17-jre-jammy AS runtime

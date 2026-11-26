@@ -197,8 +197,9 @@ class ChannelWatchManager(
         }
 
         val total = savedTotal.get()
-        return if (total == 0 && lastError != null) {
-            AppResult.Failure(lastError!!)
+        val finalError = lastError
+        return if (total == 0 && finalError != null) {
+            AppResult.Failure(finalError)
         } else {
             AppResult.Success(total)
         }

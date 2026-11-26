@@ -13,6 +13,7 @@ data class ServerConfig(
     val dataDir: File,
     val downloadDir: File,
     val pollIntervalMinutes: Int,
+    val watchConcurrency: Int,
     val syncOnStart: Boolean,
     val presetApiId: Int?,
     val presetApiHash: String?
@@ -41,6 +42,10 @@ data class ServerConfig(
                 ?.toIntOrNull()
                 ?.coerceAtLeast(0)
                 ?: 30
+            val concurrency = getValue("concurrency", "TELEDRIVE_WATCH_CONCURRENCY")
+                ?.toIntOrNull()
+                ?.coerceIn(1, 8)
+                ?: 4
             val syncOnStart = getValue("sync-on-start", "TELEDRIVE_SYNC_ON_START")
                 ?.lowercase()
                 ?.let { it == "true" || it == "1" || it == "yes" }
@@ -56,6 +61,7 @@ data class ServerConfig(
                 dataDir = dataDir,
                 downloadDir = downloadDir,
                 pollIntervalMinutes = pollMinutes,
+                watchConcurrency = concurrency,
                 syncOnStart = syncOnStart,
                 presetApiId = presetApiId,
                 presetApiHash = presetApiHash

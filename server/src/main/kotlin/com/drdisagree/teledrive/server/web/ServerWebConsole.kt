@@ -248,6 +248,7 @@ class ServerWebConsole(
                     watchLoopActive = snap.watchLoopActive,
                     syncingHistoryNow = snap.syncingHistoryNow,
                     pollIntervalMinutes = snap.pollIntervalMinutes,
+                    watchConcurrency = snap.watchConcurrency,
                     lastSyncAtEpochMs = snap.lastSyncAtEpochMs,
                     nextPollAtEpochMs = snap.nextPollAtEpochMs,
                     lastSyncSavedCount = snap.lastSyncSavedCount,
@@ -384,7 +385,8 @@ class ServerWebConsole(
                 watchedChannelHistoryLimit = prefs.watchedChannelHistoryLimit,
                 watchedChannelAutoDownload = prefs.watchedChannelAutoDownload,
                 downloadDirectory = prefs.downloadDirectory ?: config.downloadDir.absolutePath,
-                pollIntervalMinutes = snap.pollIntervalMinutes
+                pollIntervalMinutes = snap.pollIntervalMinutes,
+                watchConcurrency = snap.watchConcurrency
             )
         )
     }
@@ -401,15 +403,14 @@ class ServerWebConsole(
             )
         }
         daemon.updatePollIntervalMinutes(req.pollIntervalMinutes)
-        log.info("Updated watch config: channels=${req.watchedChannelIds.size}, limit=$clampedLimit, autoDownload=${req.watchedChannelAutoDownload}, poll=${req.pollIntervalMinutes}m")
+        daemon.updateWatchConcurrency(req.watchConcurrency)
+        log.info("Updated watch config: channels=${req.watchedChannelIds.size}, limit=$clampedLimit, autoDownload=${req.watchedChannelAutoDownload}, poll=${req.pollIntervalMinutes}m, threads=${req.watchConcurrency}")
         sendJson(exchange, 200, OkResponse(ok = true))
     }
 
-    private fun handleSyncNow(exchange: HttpExchange) = runBlocking {
-        when (val res = daemon.triggerManualSync()) {
-            is AppResult.Success -> sendJson(exchange, 200, SyncNowResponse(ok = true, savedCount = res.value))
-            is AppResult.Failure -> sendJson(exchange, 400, ErrorResponse(ok = false, error = res.error.toString()))
-        }
+    private fun handleSyncNow(exchange: HttpExchange) {
+        val started = daemon.triggerManualSyncAsync()
+        sendJson(exchange, 200, SyncNowResponse(ok = true, started = started))
     }
 
     private fun handleResetHistory(exchange: HttpExchange) = runBlocking {
@@ -500,6 +501,7 @@ class ServerWebConsole(
     val watchLoopActive: Boolean,
     val syncingHistoryNow: Boolean,
     val pollIntervalMinutes: Int,
+    val watchConcurrency: Int = 4,
     val lastSyncAtEpochMs: Long?,
     val nextPollAtEpochMs: Long?,
     val lastSyncSavedCount: Int?,
@@ -537,8 +539,9 @@ class ServerWebConsole(
     val watchedChannelHistoryLimit: Int = 50,
     val watchedChannelAutoDownload: Boolean = false,
     val downloadDirectory: String = "",
-    val pollIntervalMinutes: Int = 30
+    val pollIntervalMinutes: Int = 30,
+    val watchConcurrency: Int = 4
 )
-@Serializable data class SyncNowResponse(val ok: Boolean, val savedCount: Int)
+@Serializable data class SyncNowResponse(val ok: Boolean, val started: Boolean)
 @Serializable data class ResetHistoryRequest(val channelIds: List<Long>? = null)
 @Serializable data class LogsResponse(val entries: List<ServerLogEntry>)

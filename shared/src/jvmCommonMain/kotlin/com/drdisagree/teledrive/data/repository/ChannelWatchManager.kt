@@ -26,10 +26,14 @@ import com.drdisagree.teledrive.domain.model.FileCategory
 import com.drdisagree.teledrive.domain.repository.SettingsRepository
 import com.drdisagree.teledrive.domain.repository.TransferRepository
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -38,7 +42,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -57,7 +63,9 @@ class ChannelWatchManager(
     private val watchedChannelHistoryDao: WatchedChannelHistoryDao
 ) {
 
-    private val processingMutex = Mutex()
+    private val dedupMutex = Mutex()
+    private val folderMutex = Mutex()
+    private val historyDbMutex = Mutex()
     private val inFlightUniqueIds = HashSet<String>()
 
     suspend fun watch() {
@@ -67,22 +75,32 @@ class ChannelWatchManager(
             .collectLatest { (watchedIds, storageChatId) ->
                 val effectiveIds = watchedIds.filterTo(LinkedHashSet()) { it != storageChatId }
                 if (effectiveIds.isEmpty()) return@collectLatest
-                val opened = mutableListOf<Long>()
-                for (chatId in effectiveIds) {
-                    runCatching { telegramClient.openChat(chatId) }
-                        .onSuccess { opened += chatId }
-                        .onFailure { SafeLog.w(TAG, "Failed to open watched chat $chatId", it) }
-                }
-                try {
-                    debounceAndCollect(effectiveIds)
-                } finally {
-                    withContext(NonCancellable) {
-                        for (chatId in opened) {
-                            runCatching { telegramClient.closeChat(chatId) }
+
+                // Launch an independent worker coroutine per channel on Dispatchers.IO so multiple
+                // watched channels are monitored and processed concurrently without blocking each other.
+                coroutineScope {
+                    for (chatId in effectiveIds) {
+                        launch(Dispatchers.IO) {
+                            watchSingleChannel(chatId)
                         }
                     }
                 }
             }
+    }
+
+    private suspend fun watchSingleChannel(chatId: Long) {
+        val opened = runCatching { telegramClient.openChat(chatId) }
+            .onFailure { SafeLog.w(TAG, "Failed to open watched chat $chatId", it) }
+            .isSuccess
+        try {
+            debounceAndCollect(setOf(chatId))
+        } finally {
+            if (opened) {
+                withContext(NonCancellable) {
+                    runCatching { telegramClient.closeChat(chatId) }
+                }
+            }
+        }
     }
 
     private suspend fun debounceAndCollect(watchedIds: Set<Long>) = coroutineScope {
@@ -93,7 +111,7 @@ class ChannelWatchManager(
         telegramClient.incomingChannelVideos(watchedIds).collect { doc ->
             if (isManifestedOrEmpty(doc)) return@collect
             if (doc.mediaAlbumId == 0L) {
-                launch {
+                launch(Dispatchers.IO) {
                     try {
                         processVideoBatch(listOf(doc))
                     } catch (ce: CancellationException) {
@@ -107,7 +125,7 @@ class ChannelWatchManager(
                 albumMutex.withLock {
                     albumBuffers.getOrPut(key) { mutableListOf() }.add(doc)
                     albumJobs.remove(key)?.cancel()
-                    albumJobs[key] = launch {
+                    albumJobs[key] = launch(Dispatchers.IO) {
                         delay(ALBUM_DEBOUNCE_MS.milliseconds)
                         val batch = albumMutex.withLock {
                             albumJobs.remove(key)
@@ -131,7 +149,10 @@ class ChannelWatchManager(
         }
     }
 
-    suspend fun syncWatchedChannelHistory(limitPerChannel: Int? = null): AppResult<Int> {
+    suspend fun syncWatchedChannelHistory(
+        limitPerChannel: Int? = null,
+        concurrency: Int = DEFAULT_CONCURRENCY
+    ): AppResult<Int> {
         val prefs = settingsRepository.preferences.first()
         if (prefs.watchedChannelIds.isEmpty()) return AppResult.Success(0)
         val storageChatId = try {
@@ -140,31 +161,46 @@ class ChannelWatchManager(
             return AppResult.Failure(e.toAppError())
         }
 
+        val targetChannels = prefs.watchedChannelIds.filter { it != storageChatId }
+        if (targetChannels.isEmpty()) return AppResult.Success(0)
+
         val limit = (limitPerChannel ?: prefs.watchedChannelHistoryLimit).coerceAtLeast(1)
-        var savedTotal = 0
+        val maxConcurrent = concurrency.coerceIn(1, MAX_CONCURRENCY)
+        val semaphore = Semaphore(maxConcurrent)
+        val savedTotal = AtomicInteger(0)
+        val errorMutex = Mutex()
         var lastError: AppError? = null
 
-        for (channelId in prefs.watchedChannelIds) {
-            if (channelId == storageChatId) continue
-            try {
-                savedTotal += syncSingleChannelHistory(
-                    channelId = channelId,
-                    storageChatId = storageChatId,
-                    limitMessages = limit,
-                    autoDownload = prefs.watchedChannelAutoDownload
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (e: TelegramException) {
-                SafeLog.w(TAG, "Fetching history failed for channel $channelId: ${e.code}")
-                lastError = e.toAppError()
-            }
+        coroutineScope {
+            targetChannels.map { channelId ->
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        try {
+                            val saved = syncSingleChannelHistory(
+                                channelId = channelId,
+                                storageChatId = storageChatId,
+                                limitMessages = limit,
+                                autoDownload = prefs.watchedChannelAutoDownload
+                            )
+                            savedTotal.addAndGet(saved)
+                        } catch (ce: CancellationException) {
+                            throw ce
+                        } catch (e: TelegramException) {
+                            SafeLog.w(TAG, "Fetching history failed for channel $channelId: ${e.code}")
+                            errorMutex.withLock { lastError = e.toAppError() }
+                        } catch (t: Throwable) {
+                            SafeLog.w(TAG, "Unexpected error fetching history for channel $channelId", t)
+                        }
+                    }
+                }
+            }.awaitAll()
         }
 
-        return if (savedTotal == 0 && lastError != null) {
-            AppResult.Failure(lastError)
+        val total = savedTotal.get()
+        return if (total == 0 && lastError != null) {
+            AppResult.Failure(lastError!!)
         } else {
-            AppResult.Success(savedTotal)
+            AppResult.Success(total)
         }
     }
 
@@ -174,8 +210,9 @@ class ChannelWatchManager(
         limitMessages: Int,
         autoDownload: Boolean
     ): Int {
-        var cursor = watchedChannelHistoryDao.getCursor(storageChatId, channelId)
-            ?: WatchedChannelCursorEntity(storageChatId, channelId)
+        var cursor = historyDbMutex.withLock {
+            watchedChannelHistoryDao.getCursor(storageChatId, channelId)
+        } ?: WatchedChannelCursorEntity(storageChatId, channelId)
 
         var remainingQuota = limitMessages
         var savedVideosCount = 0
@@ -210,6 +247,7 @@ class ChannelWatchManager(
 
         // Phase 2: Tail continuation (walk backwards from oldestScannedMessageId into older history)
         var currentFromId = cursor.oldestScannedMessageId
+        var consecutiveEmptyPages = 0
         while (remainingQuota > 0 && !cursor.hasReachedEnd) {
             val pageVideos = telegramClient.fetchChannelVideos(
                 chatId = channelId,
@@ -224,12 +262,19 @@ class ChannelWatchManager(
             val maxId = pageVideos.maxOf { it.messageId }
             val minId = pageVideos.minOf { it.messageId }
 
+            // Guard against TDLib returning the same boundary message ID and causing an infinite loop
+            if (currentFromId > 0L && minId >= currentFromId) {
+                cursor = cursor.copy(hasReachedEnd = true)
+                break
+            }
+
             if (cursor.newestScannedMessageId == 0L) {
                 cursor = cursor.copy(newestScannedMessageId = maxId)
             }
 
             val posts = groupIntoPosts(pageVideos).sortedByDescending { it.topMessageId }
             var lastEvaluatedId = currentFromId
+            var pageSavedCount = 0
             for (post in posts) {
                 if (remainingQuota <= 0) break
                 val postMinId = post.documents.minOf { it.messageId }
@@ -245,6 +290,7 @@ class ChannelWatchManager(
                 )
                 if (saved > 0) {
                     savedVideosCount += saved
+                    pageSavedCount += saved
                     remainingQuota--
                 }
             }
@@ -259,17 +305,29 @@ class ChannelWatchManager(
                 cursor = cursor.copy(hasReachedEnd = true)
                 break
             }
+            if (pageSavedCount == 0) {
+                consecutiveEmptyPages++
+                if (consecutiveEmptyPages >= MAX_CONSECUTIVE_SKIPPED_PAGES) {
+                    SafeLog.d(TAG, "Stopping tail scan for channel $channelId after $consecutiveEmptyPages already-fetched pages")
+                    break
+                }
+            } else {
+                consecutiveEmptyPages = 0
+            }
             currentFromId = minId
         }
 
-        watchedChannelHistoryDao.upsertCursor(cursor)
+        historyDbMutex.withLock {
+            watchedChannelHistoryDao.upsertCursor(cursor)
+        }
         return savedVideosCount
     }
 
     private suspend fun fetchHeadVideos(channelId: Long, stopAtMessageId: Long): List<RemoteDocument> {
         val collected = mutableListOf<RemoteDocument>()
         var fromId = 0L
-        while (true) {
+        var pages = 0
+        while (pages++ < MAX_HEAD_PAGES) {
             val batch = telegramClient.fetchChannelVideos(
                 chatId = channelId,
                 fromMessageId = fromId,
@@ -281,7 +339,9 @@ class ChannelWatchManager(
             if (newer.size < batch.size) {
                 break
             }
-            fromId = batch.minOf { it.messageId }
+            val nextFromId = batch.minOf { it.messageId }
+            if (fromId > 0L && nextFromId >= fromId) break
+            fromId = nextFromId
         }
         return collected
     }
@@ -379,31 +439,33 @@ class ChannelWatchManager(
         autoDownloadOverride: Boolean? = null
     ): Int {
         if (items.isEmpty()) return 0
-        return processingMutex.withLock {
-            val preFiltered = items.filterNot(::isManifestedOrEmpty).distinctBy { it.uniqueFileId }
-            if (preFiltered.isEmpty()) return@withLock 0
+        val preFiltered = items.filterNot(::isManifestedOrEmpty).distinctBy { it.uniqueFileId }
+        if (preFiltered.isEmpty()) return 0
 
-            val prefs = settingsRepository.preferences.first()
-            val storageChatId = storageChatIdOverride
-                ?: telegramClient.ensureStorageChat(prefs.storageChatId)
-            val candidates = preFiltered.filter { it.chatId != storageChatId }
-            if (candidates.isEmpty()) return@withLock 0
-            val autoDownload = autoDownloadOverride ?: prefs.watchedChannelAutoDownload
+        val prefs = settingsRepository.preferences.first()
+        val storageChatId = storageChatIdOverride
+            ?: telegramClient.ensureStorageChat(prefs.storageChatId)
+        val candidates = preFiltered.filter { it.chatId != storageChatId }
+        if (candidates.isEmpty()) return 0
+        val autoDownload = autoDownloadOverride ?: prefs.watchedChannelAutoDownload
 
-            val uniqueIds = candidates.map { it.uniqueFileId }.distinct()
+        val uniqueIds = candidates.map { it.uniqueFileId }.distinct()
+        val pending = dedupMutex.withLock {
             val alreadySavedIds = fileDao.byRemoteUniqueIds(uniqueIds)
                 .filter { it.chatId == storageChatId }
                 .mapNotNull { it.remoteUniqueId }
                 .toSet()
 
-            val pending = candidates.filter { doc ->
+            candidates.filter { doc ->
                 doc.uniqueFileId !in alreadySavedIds && inFlightUniqueIds.add(doc.uniqueFileId)
             }
-            if (pending.isEmpty()) return@withLock 0
+        }
+        if (pending.isEmpty()) return 0
 
-            try {
-                savePendingBatch(pending, storageChatId, autoDownload)
-            } finally {
+        return try {
+            savePendingBatch(pending, storageChatId, autoDownload)
+        } finally {
+            dedupMutex.withLock {
                 pending.forEach { inFlightUniqueIds.remove(it.uniqueFileId) }
             }
         }
@@ -442,17 +504,18 @@ class ChannelWatchManager(
         }
 
         var createdFolders = false
-        val folderId = if (folderPath.isBlank()) {
-            null
-        } else {
-            folderPathResolver.resolveExisting(folderPath, storageChatId)
-                ?: folderPathResolver.resolveOrCreate(folderPath, chatId = storageChatId)?.also {
-                    createdFolders = true
-                    folderDao.markPendingPublish()
-                }
+        val (folderId, usedNames) = folderMutex.withLock {
+            val resolvedFolderId = if (folderPath.isBlank()) {
+                null
+            } else {
+                folderPathResolver.resolveExisting(folderPath, storageChatId)
+                    ?: folderPathResolver.resolveOrCreate(folderPath, chatId = storageChatId)?.also {
+                        createdFolders = true
+                        folderDao.markPendingPublish()
+                    }
+            }
+            resolvedFolderId to fileDao.namesInFolder(resolvedFolderId).toMutableList()
         }
-
-        val usedNames = fileDao.namesInFolder(folderId).toMutableList()
         var savedCount = 0
         val savedDocs = mutableListOf<RemoteDocument>()
 
@@ -580,5 +643,9 @@ class ChannelWatchManager(
         internal const val ALBUM_DEBOUNCE_MS = 2_000L
         private const val DEFAULT_HISTORY_LIMIT = 50
         private const val HISTORY_PAGE_SIZE = 100
+        internal const val DEFAULT_CONCURRENCY = 4
+        internal const val MAX_CONCURRENCY = 8
+        private const val MAX_CONSECUTIVE_SKIPPED_PAGES = 15
+        private const val MAX_HEAD_PAGES = 20
     }
 }

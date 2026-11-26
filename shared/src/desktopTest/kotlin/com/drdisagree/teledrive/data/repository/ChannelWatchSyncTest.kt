@@ -418,6 +418,50 @@ class ChannelWatchSyncTest {
     }
 
     @Test
+    fun `multi channel history sync runs concurrently and isolates per channel failures`() = runBlocking {
+        val ch1 = -3001L
+        val ch2 = -3002L
+        val ch3 = -3003L
+
+        val doc1 = RemoteDocument(
+            chatId = ch1, messageId = 10L, remoteFileId = "mc-r-1", uniqueFileId = "mc-u-1",
+            fileName = "c1.mp4", mimeType = "video/mp4", sizeBytes = 1024L, caption = "#频道1",
+            dateSeconds = 1000, sourceChannelTitle = "频道A"
+        )
+        val doc3a = RemoteDocument(
+            chatId = ch3, messageId = 20L, remoteFileId = "mc-r-2", uniqueFileId = "mc-u-2",
+            fileName = "c3a.mp4", mimeType = "video/mp4", sizeBytes = 1024L, caption = "#频道3a",
+            dateSeconds = 1000, sourceChannelTitle = "频道C"
+        )
+        val doc3b = RemoteDocument(
+            chatId = ch3, messageId = 21L, remoteFileId = "mc-r-3", uniqueFileId = "mc-u-3",
+            fileName = "c3b.mp4", mimeType = "video/mp4", sizeBytes = 1024L, caption = "#频道3b",
+            dateSeconds = 1000, sourceChannelTitle = "频道C"
+        )
+
+        telegram.channelHistoryVideos = mapOf(
+            ch1 to listOf(doc1),
+            ch2 to emptyList(),
+            ch3 to listOf(doc3a, doc3b)
+        )
+        harness.settings.update {
+            it.copy(
+                watchedChannelIds = setOf(ch1, ch2, ch3),
+                watchedChannelHistoryLimit = 10
+            )
+        }
+
+        val manager = newManager()
+        val result = manager.syncWatchedChannelHistory(concurrency = 4)
+        assertEquals(AppResult.Success(3), result)
+
+        val savedUniqueIds = database.fileDao().observeList(FileQueryBuilder.build(FileQuerySpec())).first().map { it.remoteUniqueId }
+        assertTrue(savedUniqueIds.contains("mc-u-1"))
+        assertTrue(savedUniqueIds.contains("mc-u-2"))
+        assertTrue(savedUniqueIds.contains("mc-u-3"))
+    }
+
+    @Test
     fun `sync auto organizes manually forwarded unmanifested single video and multi video album`() = runBlocking {
         telegram.documents = listOf(
             RemoteDocument(

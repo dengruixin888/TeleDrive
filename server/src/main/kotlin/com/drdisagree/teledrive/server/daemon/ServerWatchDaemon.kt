@@ -36,6 +36,7 @@ data class DaemonRuntimeSnapshot(
     val watchLoopActive: Boolean,
     val syncingHistoryNow: Boolean,
     val pollIntervalMinutes: Int,
+    val watchConcurrency: Int,
     val lastSyncAtEpochMs: Long?,
     val nextPollAtEpochMs: Long?,
     val lastSyncSavedCount: Int?,
@@ -68,6 +69,7 @@ class ServerWatchDaemon(
     private val watchActive = AtomicBoolean(false)
     private val syncingNow = AtomicBoolean(false)
     private val pollIntervalMinutes = AtomicInteger(config.pollIntervalMinutes)
+    private val watchConcurrency = AtomicInteger(config.watchConcurrency)
     private val lastSyncAt = AtomicLong(0L)
     private val nextPollAt = AtomicLong(0L)
     private val totalSaved = AtomicInteger(0)
@@ -193,6 +195,14 @@ class ServerWatchDaemon(
         }
     }
 
+    fun triggerManualSyncAsync(): Boolean {
+        if (syncingNow.get()) return false
+        scope.launch {
+            runSyncInternal(trigger = "manual")
+        }
+        return true
+    }
+
     suspend fun triggerManualSync(): AppResult<Int> = runSyncInternal(trigger = "manual")
 
     suspend fun resetHistory(channelIds: List<Long>?): AppResult<Unit> {
@@ -224,10 +234,17 @@ class ServerWatchDaemon(
         }
     }
 
+    fun updateWatchConcurrency(concurrency: Int) {
+        val clamped = concurrency.coerceIn(1, 8)
+        watchConcurrency.set(clamped)
+        log.info("Updated concurrent channel watch/sync threads to $clamped")
+    }
+
     fun snapshot(): DaemonRuntimeSnapshot = DaemonRuntimeSnapshot(
         watchLoopActive = watchActive.get(),
         syncingHistoryNow = syncingNow.get(),
         pollIntervalMinutes = pollIntervalMinutes.get(),
+        watchConcurrency = watchConcurrency.get(),
         lastSyncAtEpochMs = lastSyncAt.get().takeIf { it > 0L },
         nextPollAtEpochMs = nextPollAt.get().takeIf { it > 0L },
         lastSyncSavedCount = lastSyncSaved,
@@ -246,8 +263,9 @@ class ServerWatchDaemon(
         return syncMutex.withLock {
             syncingNow.set(true)
             try {
-                log.info("Running $trigger history catch-up sync (limit=${prefs.watchedChannelHistoryLimit} msgs/channel)...")
-                val result = channelWatchManager.syncWatchedChannelHistory()
+                val concurrency = watchConcurrency.get()
+                log.info("Running $trigger concurrent history sync (channels=${prefs.watchedChannelIds.size}, threads=$concurrency, limit=${prefs.watchedChannelHistoryLimit} msgs/channel)...")
+                val result = channelWatchManager.syncWatchedChannelHistory(concurrency = concurrency)
                 lastSyncAt.set(System.currentTimeMillis())
                 when (result) {
                     is AppResult.Success -> {

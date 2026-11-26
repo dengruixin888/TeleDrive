@@ -1415,22 +1415,27 @@ class DesktopTelegramClient(
         limit: Int
     ): List<RemoteDocument> {
         awaitAuthorized()
-        runCatching { send<TdApi.Ok>(TdApi.OpenChat(chatId)) }
-        val channelTitle = resolveChatTitle(chatId)
+        runCatching { withTimeoutOrNull(10_000L) { send<TdApi.Ok>(TdApi.OpenChat(chatId)) } }
+        val channelTitle = withTimeoutOrNull(10_000L) { resolveChatTitle(chatId) }
         val collected = LinkedHashMap<Long, RemoteDocument>()
 
-        suspend fun searchByFilter(filter: TdApi.SearchMessagesFilter) {
-            var found = send(
-                TdApi.SearchChatMessages(chatId, null, "", null, fromMessageId, 0, limit, filter)
-            )
-            var attempts = 0
-            while (found.messages.isEmpty() && attempts++ < HISTORY_RETRIES) {
-                delay(HISTORY_RETRY_MS.milliseconds)
-                found = send(
+        suspend fun searchByFilter(filter: TdApi.SearchMessagesFilter, allowRetry: Boolean) {
+            var found = withTimeoutOrNull(30_000L) {
+                send(
                     TdApi.SearchChatMessages(chatId, null, "", null, fromMessageId, 0, limit, filter)
                 )
+            } ?: return
+            var attempts = 0
+            while (allowRetry && found.messages.isEmpty() && attempts++ < 1) {
+                delay(HISTORY_RETRY_MS.milliseconds)
+                found = withTimeoutOrNull(30_000L) {
+                    send(
+                        TdApi.SearchChatMessages(chatId, null, "", null, fromMessageId, 0, limit, filter)
+                    )
+                } ?: break
             }
             for (msg in found.messages) {
+                if (fromMessageId > 0L && msg.id >= fromMessageId) continue
                 val doc = msg.toVideoRemoteDocument() ?: continue
                 collected.putIfAbsent(
                     doc.messageId,
@@ -1439,8 +1444,8 @@ class DesktopTelegramClient(
             }
         }
 
-        searchByFilter(TdApi.SearchMessagesFilterVideo())
-        searchByFilter(TdApi.SearchMessagesFilterDocument())
+        searchByFilter(TdApi.SearchMessagesFilterVideo(), allowRetry = fromMessageId == 0L)
+        searchByFilter(TdApi.SearchMessagesFilterDocument(), allowRetry = false)
         return collected.values.sortedByDescending { it.messageId }
     }
 

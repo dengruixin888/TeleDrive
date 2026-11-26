@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM eclipse-temurin:17-jdk-jammy AS builder
+FROM eclipse-temurin:21-jdk-jammy AS builder
 WORKDIR /workspace
 
 COPY gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties ./
@@ -8,8 +8,9 @@ COPY gradle ./gradle
 COPY shared ./shared
 COPY server ./server
 
+ENV GRADLE_OPTS="-Xmx1024m -XX:MaxMetaspaceSize=384m"
 RUN chmod +x gradlew && \
-    ./gradlew :server:installDist -PtdlightNativesOs=linux --no-daemon
+    ./gradlew :server:installDist -PtdlightNativesOs=linux -Dkotlin.compiler.execution.strategy=in-process --no-daemon --max-workers=2
 
 FROM eclipse-temurin:17-jre-jammy AS runtime
 WORKDIR /app

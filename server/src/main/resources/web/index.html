@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TeleDrive 服务器管理面板</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --input: #0f172a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+    header {
+      display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+      gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+    }
+    h1 { margin: 0; font-size: 20px; display: flex; align-items: center; gap: 10px; }
+    .badge {
+      display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+      background: #334155; color: #e2e8f0;
+    }
+    .badge.ok { background: rgba(16,185,129,0.2); color: #34d399; }
+    .badge.warn { background: rgba(245,158,11,0.2); color: #fbbf24; }
+    .badge.err { background: rgba(239,68,68,0.2); color: #f87171; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px;
+      margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 16px; color: #e2e8f0; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    input[type="text"], input[type="password"], input[type="number"], select {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--input); color: var(--text); font-size: 14px; outline: none;
+    }
+    input:focus, select:focus { border-color: var(--primary); }
+    button {
+      padding: 8px 14px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600;
+      cursor: pointer; background: var(--primary); color: #fff; transition: background 0.15s;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary { background: #334155; }
+    button.secondary:hover { background: #475569; }
+    button.danger { background: var(--danger); }
+    button.danger:hover { background: #dc2626; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .stat-box { background: rgba(15,23,42,0.6); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); }
+    .stat-label { font-size: 12px; color: var(--muted); }
+    .stat-val { font-size: 16px; font-weight: 700; margin-top: 2px; }
+    .channel-list {
+      max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;
+      background: rgba(15,23,42,0.5); padding: 6px;
+    }
+    .channel-item {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    }
+    .channel-item:hover { background: rgba(59,130,246,0.12); }
+    .log-box {
+      background: #020617; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+      height: 240px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    }
+    .log-line { margin-bottom: 3px; word-break: break-all; }
+    .log-WARN { color: #fbbf24; }
+    .log-ERROR { color: #f87171; }
+    .hidden { display: none !important; }
+    .toast {
+      position: fixed; bottom: 20px; right: 20px; background: #1e293b; border: 1px solid var(--primary);
+      padding: 10px 16px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); z-index: 999;
+    }
+    .qr-wrap { text-align: center; padding: 12px; background: #fff; border-radius: 10px; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>TeleDrive Server <span id="verBadge" class="badge">v-</span></h1>
+      <div class="row" style="margin-bottom:0">
+        <span id="connBadge" class="badge">连接中</span>
+        <span id="watchBadge" class="badge">监听未启动</span>
+        <button id="adminLogoutBtn" class="secondary hidden" onclick="adminLogout()">退出管理</button>
+      </div>
+    </header>
+
+    <!-- 管理密码登录视图 -->
+    <div id="adminLoginView" class="card hidden" style="max-width:400px;margin:60px auto;">
+      <h2>管理员登录</h2>
+      <div style="margin-bottom:12px;">
+        <label>管理密码</label>
+        <input type="password" id="adminPwdInput" placeholder="请输入 TELEDRIVE_ADMIN_PASSWORD" onkeydown="if(event.key==='Enter')adminLogin()" />
+      </div>
+      <button style="width:100%" onclick="adminLogin()">登录控制台</button>
+    </div>
+
+    <!-- 主控制台 -->
+    <div id="mainView" class="hidden">
+      <!-- 状态概览 -->
+      <div class="card">
+        <h2>运行状态与实时监控</h2>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="stat-label">Telegram 账号</div><div class="stat-val" id="statUser">未登录</div></div>
+          <div class="stat-box"><div class="stat-label">监控频道数</div><div class="stat-val" id="statWatched">0</div></div>
+          <div class="stat-box"><div class="stat-label">本次启动已抓取</div><div class="stat-val" id="statTotalSaved">0</div></div>
+          <div class="stat-box"><div class="stat-label">上次巡检</div><div class="stat-val" id="statLastSync">-</div></div>
+          <div class="stat-box"><div class="stat-label">下次巡检</div><div class="stat-val" id="statNextPoll">-</div></div>
+        </div>
+        <div id="statError" class="badge err hidden" style="margin-top:10px;display:block;"></div>
+      </div>
+
+      <div class="grid">
+        <!-- Telegram 账号与代理 -->
+        <div class="card">
+          <h2>1. Telegram 账号连接</h2>
+          <div id="authSummary" style="margin-bottom:12px;font-size:13px;color:var(--muted);">正在读取状态...</div>
+
+          <!-- API 凭据 -->
+          <div id="apiConfigBox" class="hidden">
+            <div style="margin-bottom:8px;"><label>API ID</label><input type="number" id="apiIdInput" placeholder="例如 1234567" /></div>
+            <div style="margin-bottom:10px;"><label>API Hash</label><input type="text" id="apiHashInput" placeholder="32位字符" /></div>
+            <button onclick="saveApiConfig()">初始化 Telegram 客户端</button>
+          </div>
+
+          <!-- 手机号/QR 选择 -->
+          <div id="phoneBox" class="hidden">
+            <div style="margin-bottom:8px;"><label>手机号（带国家区号，如 +8613800138000）</label><input type="text" id="phoneInput" /></div>
+            <div class="row">
+              <button onclick="submitPhone()">发送验证码</button>
+              <button class="secondary" onclick="requestQr()">改用二维码扫码登录</button>
+            </div>
+          </div>
+
+          <!-- QR 扫码 -->
+          <div id="qrBox" class="hidden" style="text-align:center;">
+            <div class="qr-wrap"><img id="qrImg" src="" alt="Telegram QR" width="200" height="200" /></div>
+            <p style="font-size:12px;color:var(--muted);">打开手机 Telegram → 设置 → 设备 → 链接桌面设备</p>
+            <button class="secondary" onclick="restartAuth()">返回手机号登录</button>
+          </div>
+
+          <!-- 验证码 -->
+          <div id="codeBox" class="hidden">
+            <div style="margin-bottom:8px;"><label id="codeLabel">请输入验证码</label><input type="text" id="codeInput" /></div>
+            <div class="row">
+              <button onclick="submitCode()">提交验证码</button>
+              <button class="secondary" onclick="restartAuth()">重新开始</button>
+            </div>
+          </div>
+
+          <!-- 2FA 密码 -->
+          <div id="pwdBox" class="hidden">
+            <div style="margin-bottom:8px;"><label id="pwdLabel">两步验证密码</label><input type="password" id="tgPwdInput" /></div>
+            <button onclick="submitTgPwd()">验证密码</button>
+          </div>
+
+          <!-- 已登录操作 -->
+          <div id="readyUserBox" class="hidden">
+            <div class="row">
+              <button class="danger" onclick="tgLogout()">退出当前 Telegram 账号</button>
+            </div>
+          </div>
+
+          <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;" />
+          <details>
+            <summary style="cursor:pointer;font-size:13px;color:var(--muted);">网络代理设置 (SOCKS5 / HTTP / MTProto)</summary>
+            <div style="margin-top:10px;">
+              <div class="row">
+                <label style="display:flex;align-items:center;gap:6px;margin:0;"><input type="checkbox" id="proxyEnabled" /> 启用代理</label>
+                <select id="proxyType" style="width:auto;">
+                  <option value="SOCKS5">SOCKS5</option>
+                  <option value="HTTP">HTTP</option>
+                  <option value="MTPROTO">MTPROTO</option>
+                </select>
+              </div>
+              <div class="row">
+                <input type="text" id="proxyHost" placeholder="主机 IP (如 127.0.0.1)" style="flex:2" />
+                <input type="number" id="proxyPort" placeholder="端口" value="1080" style="flex:1" />
+              </div>
+              <div class="row">
+                <input type="text" id="proxyUser" placeholder="用户名 (可选)" style="flex:1" />
+                <input type="password" id="proxyPass" placeholder="密码/Secret (可选)" style="flex:1" />
+              </div>
+              <button class="secondary" onclick="applyProxy()">应用代理</button>
+            </div>
+          </details>
+        </div>
+
+        <!-- 存储频道 -->
+        <div class="card">
+          <h2>2. TeleDrive 存储频道（网盘目标）</h2>
+          <div class="row">
+            <button class="secondary" onclick="loadStorageChannels()">刷新存储频道</button>
+          </div>
+          <div id="storageList" class="channel-list" style="margin-bottom:12px;">
+            <div style="padding:12px;color:var(--muted);font-size:13px;">登录 Telegram 后点击刷新查看</div>
+          </div>
+          <div class="row">
+            <input type="text" id="newStorageName" placeholder="新建存储频道名称（如 VideoVault）" style="flex:1" />
+            <button onclick="createStorageChannel()">新建并启用</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 频道监控与持续抓取配置 -->
+      <div class="card">
+        <h2>3. 频道监控与持续抓取配置</h2>
+        <div class="grid">
+          <div>
+            <div class="row">
+              <input type="text" id="channelSearch" placeholder="搜索已加入的频道/群组..." oninput="renderJoinedChannels()" style="flex:1" />
+              <button class="secondary" onclick="loadJoinedChannels()">刷新频道列表</button>
+            </div>
+            <div id="joinedList" class="channel-list">
+              <div style="padding:12px;color:var(--muted);font-size:13px;">点击“刷新频道列表”加载您加入的频道</div>
+            </div>
+          </div>
+          <div>
+            <div style="margin-bottom:10px;">
+              <label>单频道每次抓取历史消息上限（按消息条数，相册计 1 条）</label>
+              <input type="number" id="historyLimitInput" min="1" value="50" />
+            </div>
+            <div style="margin-bottom:10px;">
+              <label>定时防漏抓巡检间隔（分钟，0 表示仅实时监听）</label>
+              <input type="number" id="pollIntervalInput" min="0" value="30" />
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:flex;align-items:center;gap:8px;color:var(--text);">
+                <input type="checkbox" id="autoDownloadInput" />
+                抓到视频后同时自动下载到服务器本地目录
+              </label>
+            </div>
+            <div style="margin-bottom:12px;">
+              <label>服务器本地下载目录</label>
+              <input type="text" id="downloadDirInput" placeholder="/downloads" />
+            </div>
+            <div class="row">
+              <button onclick="saveWatchConfig()">保存监控配置</button>
+              <button id="syncNowBtn" class="secondary" onclick="syncNow()">立即抓取历史消息</button>
+              <button class="danger" onclick="resetHistoryAll()">重置抓取记录</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 实时日志 -->
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px;">
+          <h2 style="margin:0;">运行日志</h2>
+          <button class="secondary" onclick="loadLogs()">刷新日志</button>
+        </div>
+        <div id="logBox" class="log-box"></div>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script>
+    let joinedChannels = [];
+    let selectedWatchIds = new Set();
+    let authenticated = false;
+
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 3200);
+    }
+
+    async function api(url, opts = {}) {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      return data;
+    }
+
+    async function init() {
+      const sess = await api('/api/auth/session');
+      if (sess.authRequired && !sess.authenticated) {
+        document.getElementById('adminLoginView').classList.remove('hidden');
+        document.getElementById('mainView').classList.add('hidden');
+        return;
+      }
+      authenticated = true;
+      document.getElementById('adminLoginView').classList.add('hidden');
+      document.getElementById('mainView').classList.remove('hidden');
+      if (sess.authRequired) document.getElementById('adminLogoutBtn').classList.remove('hidden');
+
+      await Promise.all([refreshStatus(), loadWatchConfig(), loadLogs()]);
+      setInterval(() => { if (authenticated) { refreshStatus(); loadLogs(); } }, 3500);
+    }
+
+    async function adminLogin() {
+      try {
+        await api('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ password: document.getElementById('adminPwdInput').value })
+        });
+        init();
+      } catch (e) { toast(e.message); }
+    }
+
+    async function adminLogout() {
+      await api('/api/auth/logout', { method: 'POST' });
+      location.reload();
+    }
+
+    function fmtTime(ms) {
+      if (!ms) return '-';
+      return new Date(ms).toLocaleString();
+    }
+
+    async function refreshStatus() {
+      try {
+        const s = await api('/api/status');
+        document.getElementById('verBadge').textContent = 'v' + s.version;
+        const conn = document.getElementById('connBadge');
+        conn.textContent = s.connectionState;
+        conn.className = 'badge ' + (s.connectionState === 'READY' ? 'ok' : 'warn');
+
+        const wb = document.getElementById('watchBadge');
+        wb.textContent = s.daemon.watchLoopActive ? '7×24 实时监听中' : '监听待命';
+        wb.className = 'badge ' + (s.daemon.watchLoopActive ? 'ok' : 'warn');
+
+        document.getElementById('statUser').textContent = s.user ? (s.user.name + (s.user.username ? ' @' + s.user.username : '')) : '未登录';
+        document.getElementById('statWatched').textContent = s.watchedChannelCount;
+        document.getElementById('statTotalSaved').textContent = s.daemon.totalSavedSinceBoot;
+        document.getElementById('statLastSync').textContent = fmtTime(s.daemon.lastSyncAtEpochMs);
+        document.getElementById('statNextPoll').textContent = s.daemon.pollIntervalMinutes === 0 ? '已关闭' : fmtTime(s.daemon.nextPollAtEpochMs);
+
+        const errEl = document.getElementById('statError');
+        if (s.daemon.lastError) {
+          errEl.textContent = '最近错误: ' + s.daemon.lastError;
+          errEl.classList.remove('hidden');
+        } else {
+          errEl.classList.add('hidden');
+        }
+
+        const syncBtn = document.getElementById('syncNowBtn');
+        syncBtn.disabled = s.daemon.syncingHistoryNow;
+        syncBtn.textContent = s.daemon.syncingHistoryNow ? '正在抓取...' : '立即抓取历史消息';
+
+        renderAuth(s.auth, s.hasApiCredentials);
+      } catch (e) {
+        if (e.message.includes('Unauthorized')) location.reload();
+      }
+    }
+
+    function renderAuth(auth, hasCreds) {
+      ['apiConfigBox','phoneBox','qrBox','codeBox','pwdBox','readyUserBox'].forEach(id =>
+        document.getElementById(id).classList.add('hidden')
+      );
+      document.getElementById('authSummary').textContent = '当前认证状态: ' + auth.state + (auth.error ? ' (' + auth.error + ')' : '');
+
+      if (!hasCreds || auth.state === 'UNINITIALIZED' || auth.state === 'FAILED') {
+        document.getElementById('apiConfigBox').classList.remove('hidden');
+      } else if (auth.state === 'WAITING_FOR_PHONE') {
+        document.getElementById('phoneBox').classList.remove('hidden');
+      } else if (auth.state === 'WAITING_FOR_QR') {
+        document.getElementById('qrBox').classList.remove('hidden');
+        if (auth.qrImageDataUri) document.getElementById('qrImg').src = auth.qrImageDataUri;
+      } else if (auth.state === 'WAITING_FOR_CODE') {
+        document.getElementById('codeBox').classList.remove('hidden');
+        document.getElementById('codeLabel').textContent = '请输入发送至 ' + (auth.phoneNumber || '') + ' 的验证码';
+      } else if (auth.state === 'WAITING_FOR_PASSWORD') {
+        document.getElementById('pwdBox').classList.remove('hidden');
+        document.getElementById('pwdLabel').textContent = '两步验证密码' + (auth.passwordHint ? ' (提示: ' + auth.passwordHint + ')' : '');
+      } else if (auth.state === 'READY') {
+        document.getElementById('readyUserBox').classList.remove('hidden');
+      }
+    }
+
+    async function saveApiConfig() {
+      try {
+        await api('/api/telegram/config', {
+          method: 'POST',
+          body: JSON.stringify({
+            apiId: parseInt(document.getElementById('apiIdInput').value || '0', 10),
+            apiHash: document.getElementById('apiHashInput').value
+          })
+        });
+        toast('API 凭据已配置'); refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+    async function submitPhone() {
+      try {
+        await api('/api/telegram/login/phone', { method: 'POST', body: JSON.stringify({ phoneNumber: document.getElementById('phoneInput').value }) });
+        refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+    async function requestQr() {
+      try { await api('/api/telegram/login/qr', { method: 'POST' }); refreshStatus(); } catch (e) { toast(e.message); }
+    }
+    async function submitCode() {
+      try {
+        await api('/api/telegram/login/code', { method: 'POST', body: JSON.stringify({ code: document.getElementById('codeInput').value }) });
+        refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+    async function submitTgPwd() {
+      try {
+        await api('/api/telegram/login/password', { method: 'POST', body: JSON.stringify({ password: document.getElementById('tgPwdInput').value }) });
+        refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+    async function restartAuth() {
+      try { await api('/api/telegram/restart', { method: 'POST' }); refreshStatus(); } catch (e) { toast(e.message); }
+    }
+    async function tgLogout() {
+      if (!confirm('确定要退出当前 Telegram 账号吗？')) return;
+      try { await api('/api/telegram/logout', { method: 'POST' }); refreshStatus(); } catch (e) { toast(e.message); }
+    }
+    async function applyProxy() {
+      try {
+        await api('/api/telegram/proxy', {
+          method: 'POST',
+          body: JSON.stringify({
+            enabled: document.getElementById('proxyEnabled').checked,
+            type: document.getElementById('proxyType').value,
+            host: document.getElementById('proxyHost').value,
+            port: parseInt(document.getElementById('proxyPort').value || '1080', 10),
+            username: document.getElementById('proxyUser').value,
+            password: document.getElementById('proxyPass').value
+          })
+        });
+        toast('代理设置已更新');
+      } catch (e) { toast(e.message); }
+    }
+
+    async function loadStorageChannels() {
+      try {
+        const res = await api('/api/channels/storage');
+        const el = document.getElementById('storageList');
+        if (!res.channels.length) {
+          el.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">暂无存储频道，请在下方新建</div>';
+          return;
+        }
+        el.innerHTML = res.channels.map(c => `
+          <div class="channel-item" onclick="selectStorage(${c.chatId})">
+            <input type="radio" name="storageRadio" ${c.isActive ? 'checked' : ''} />
+            <span><strong>${escapeHtml(c.title)}</strong> <small style="color:var(--muted)">(${c.fileCount} 文件)</small></span>
+          </div>
+        `).join('');
+      } catch (e) { toast(e.message); }
+    }
+
+    async function selectStorage(chatId) {
+      try {
+        await api('/api/channels/storage/select', { method: 'POST', body: JSON.stringify({ chatId }) });
+        toast('已切换存储频道'); loadStorageChannels(); refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+
+    async function createStorageChannel() {
+      const label = document.getElementById('newStorageName').value.trim();
+      if (!label) return toast('请输入频道名称');
+      try {
+        await api('/api/channels/storage/create', { method: 'POST', body: JSON.stringify({ label }) });
+        document.getElementById('newStorageName').value = '';
+        toast('存储频道已创建并启用'); loadStorageChannels(); refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+
+    async function loadJoinedChannels() {
+      try {
+        const res = await api('/api/channels/joined');
+        joinedChannels = res.channels;
+        renderJoinedChannels();
+      } catch (e) { toast(e.message); }
+    }
+
+    function renderJoinedChannels() {
+      const q = document.getElementById('channelSearch').value.trim().toLowerCase();
+      const filtered = joinedChannels.filter(c => !q || c.title.toLowerCase().includes(q));
+      const el = document.getElementById('joinedList');
+      if (!filtered.length) {
+        el.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">无匹配频道</div>';
+        return;
+      }
+      el.innerHTML = filtered.map(c => `
+        <label class="channel-item" style="margin:0;color:var(--text);">
+          <input type="checkbox" ${selectedWatchIds.has(c.chatId) ? 'checked' : ''} onchange="toggleWatch(${c.chatId}, this.checked)" />
+          <span>${escapeHtml(c.title)} <small style="color:var(--muted)">[${c.isChannel ? '频道' : '群组'}]</small></span>
+        </label>
+      `).join('');
+    }
+
+    function toggleWatch(id, checked) {
+      if (checked) selectedWatchIds.add(id); else selectedWatchIds.delete(id);
+    }
+
+    async function loadWatchConfig() {
+      try {
+        const cfg = await api('/api/watch/config');
+        selectedWatchIds = new Set(cfg.watchedChannelIds);
+        document.getElementById('historyLimitInput').value = cfg.watchedChannelHistoryLimit;
+        document.getElementById('pollIntervalInput').value = cfg.pollIntervalMinutes;
+        document.getElementById('autoDownloadInput').checked = cfg.watchedChannelAutoDownload;
+        document.getElementById('downloadDirInput').value = cfg.downloadDirectory || '';
+        if (joinedChannels.length) renderJoinedChannels();
+      } catch (_) {}
+    }
+
+    async function saveWatchConfig() {
+      try {
+        await api('/api/watch/config', {
+          method: 'PUT',
+          body: JSON.stringify({
+            watchedChannelIds: Array.from(selectedWatchIds),
+            watchedChannelHistoryLimit: parseInt(document.getElementById('historyLimitInput').value || '50', 10),
+            pollIntervalMinutes: parseInt(document.getElementById('pollIntervalInput').value || '30', 10),
+            watchedChannelAutoDownload: document.getElementById('autoDownloadInput').checked,
+            downloadDirectory: document.getElementById('downloadDirInput').value.trim()
+          })
+        });
+        toast('监控配置已保存'); refreshStatus();
+      } catch (e) { toast(e.message); }
+    }
+
+    async function syncNow() {
+      try {
+        const res = await api('/api/watch/sync-now', { method: 'POST' });
+        toast('抓取完成：新保存 ' + res.savedCount + ' 个视频');
+        refreshStatus(); loadLogs();
+      } catch (e) { toast(e.message); }
+    }
+
+    async function resetHistoryAll() {
+      if (!confirm('确定要清除当前存储网盘的所有历史抓取记录与游标吗？（不会删除网盘文件）')) return;
+      try {
+        await api('/api/watch/reset-history', { method: 'POST', body: JSON.stringify({ channelIds: null }) });
+        toast('历史抓取记录已重置');
+      } catch (e) { toast(e.message); }
+    }
+
+    async function loadLogs() {
+      try {
+        const res = await api('/api/logs');
+        const box = document.getElementById('logBox');
+        const atBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 40;
+        box.innerHTML = res.entries.map(e =>
+          `<div class="log-line log-${e.level}">[${e.timestamp}] [${e.level}] ${escapeHtml(e.message)}</div>`
+        ).join('');
+        if (atBottom) box.scrollTop = box.scrollHeight;
+      } catch (_) {}
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    init();
+  </script>
+</body>
+</html>

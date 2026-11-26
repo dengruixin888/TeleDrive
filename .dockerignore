@@ -1,0 +1,9 @@
+.git
+.gradle
+.kotlin
+build
+*/build
+local.properties
+teledrive-data
+teledrive-downloads
+*.log

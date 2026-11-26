@@ -1,0 +1,26 @@
+services:
+  teledrive-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: teledrive-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # 强烈建议设置管理面板登录密码（未设置时请勿直接暴露到公网）
+      TELEDRIVE_ADMIN_PASSWORD: "change-me-strong-password"
+      TELEDRIVE_HOST: "0.0.0.0"
+      TELEDRIVE_PORT: "8080"
+      TELEDRIVE_DATA_DIR: "/data"
+      TELEDRIVE_DOWNLOAD_DIR: "/downloads"
+      # 定时防漏抓巡检间隔（分钟），0 表示关闭定时巡检仅使用 7x24 实时监听
+      TELEDRIVE_POLL_INTERVAL_MINUTES: "30"
+      # 启动连上 Telegram 后是否立即补抓一次历史消息
+      TELEDRIVE_SYNC_ON_START: "true"
+      # 可选：直接通过环境变量预置 Telegram API 凭据（也可留空在 Web 面板填写）
+      # TELEDRIVE_API_ID: "1234567"
+      # TELEDRIVE_API_HASH: "your_api_hash"
+    volumes:
+      - ./teledrive-data:/data
+      - ./teledrive-downloads:/downloads

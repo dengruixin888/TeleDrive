@@ -41,7 +41,7 @@ data class ServerConfig(
             val pollMinutes = getValue("poll-interval", "TELEDRIVE_POLL_INTERVAL_MINUTES")
                 ?.toIntOrNull()
                 ?.coerceAtLeast(0)
-                ?: 30
+                ?: 0
             val concurrency = getValue("concurrency", "TELEDRIVE_WATCH_CONCURRENCY")
                 ?.toIntOrNull()
                 ?.coerceIn(1, 8)
@@ -49,7 +49,7 @@ data class ServerConfig(
             val syncOnStart = getValue("sync-on-start", "TELEDRIVE_SYNC_ON_START")
                 ?.lowercase()
                 ?.let { it == "true" || it == "1" || it == "yes" }
-                ?: true
+                ?: false
 
             val presetApiId = getValue("api-id", "TELEDRIVE_API_ID")?.toIntOrNull()?.takeIf { it > 0 }
             val presetApiHash = getValue("api-hash", "TELEDRIVE_API_HASH")

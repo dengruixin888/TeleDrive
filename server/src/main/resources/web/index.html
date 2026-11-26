@@ -214,9 +214,12 @@
         </div>
       </div>
 
-      <!-- 频道监控与持续抓取配置 -->
+      <!-- 3. 频道选择与通用配置 -->
       <div class="card">
-        <h2>3. 频道监控与持续抓取配置</h2>
+        <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+          <h2 style="margin:0;">3. 选择监控频道与通用设置</h2>
+          <button onclick="saveWatchConfig()">保存频道与设置</button>
+        </div>
         <div class="grid">
           <div>
             <div class="row">
@@ -228,34 +231,59 @@
             </div>
           </div>
           <div>
-            <div style="margin-bottom:10px;">
-              <label>单频道每次抓取历史消息上限（按消息条数，相册计 1 条）</label>
-              <input type="number" id="historyLimitInput" min="1" value="50" />
-            </div>
-            <div style="margin-bottom:10px;">
-              <label>定时防漏抓巡检间隔（分钟，0 表示仅实时监听）</label>
-              <input type="number" id="pollIntervalInput" min="0" value="30" />
-            </div>
-            <div style="margin-bottom:10px;">
-              <label>多频道并发抓取线程数（建议 2~6，最大 8）</label>
+            <div style="margin-bottom:12px;">
+              <label>多频道并发工作线程数（影响实时监听与历史抓取并发度，1~8）</label>
               <input type="number" id="concurrencyInput" min="1" max="8" value="4" />
             </div>
-            <div style="margin-bottom:10px;">
-              <label style="display:flex;align-items:center;gap:8px;color:var(--text);">
+            <div style="margin-bottom:12px;padding:12px;background:rgba(15,23,42,0.5);border:1px solid var(--border);border-radius:8px;">
+              <label style="display:flex;align-items:center;gap:8px;color:var(--text);margin-bottom:8px;cursor:pointer;">
                 <input type="checkbox" id="autoDownloadInput" />
-                抓到视频后同时自动下载到服务器本地目录
+                <span>抓到视频后同时自动下载到服务器本地硬盘</span>
               </label>
-            </div>
-            <div style="margin-bottom:12px;">
-              <label>服务器本地下载目录</label>
+              <label style="margin-top:6px;">服务器本地保存目录</label>
               <input type="text" id="downloadDirInput" placeholder="/downloads" />
-            </div>
-            <div class="row">
-              <button onclick="saveWatchConfig()">保存监控配置</button>
-              <button id="syncNowBtn" class="secondary" onclick="syncNow()">立即抓取历史消息</button>
-              <button class="danger" onclick="resetHistoryAll()">重置抓取记录</button>
+              <div style="font-size:12px;color:var(--muted);margin-top:4px;">不勾选则仅云端转存至您的 Telegram 存储频道（零硬盘占用）。</div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 4. 实时监听 vs 历史抓取（明确分离） -->
+      <div class="grid">
+        <div class="card">
+          <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+            <h2 style="margin:0;">4A. 7×24 实时监听（只抓今后新视频）</h2>
+            <span id="liveModeBadge" class="badge">待命</span>
+          </div>
+          <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">
+            在第 3 步勾选频道并点击「保存频道与设置」后自动生效，无需额外操作。
+          </p>
+          <ul style="font-size:13px;color:#cbd5e1;margin:0;padding-left:18px;">
+            <li>仅实时接收并保存<strong>从此刻起</strong>频道新发出的视频（1~2 秒内转存）。</li>
+            <li><strong>不会</strong>自动去翻历史旧消息，彻底与手动抓历史分离。</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-bottom:8px;">4B. 历史消息抓取（从近到远翻旧视频）</h2>
+          <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">
+            仅在您点击「立即抓取历史消息」时执行一次；已抓过的消息会永久跳过，不重复抓取。
+          </p>
+          <div style="margin-bottom:12px;">
+            <label>单频道每次最多抓取消息条数（注：含多视频的相册算 1 条消息）</label>
+            <input type="number" id="historyLimitInput" min="1" value="50" />
+          </div>
+          <div class="row" style="margin-bottom:12px;">
+            <button id="syncNowBtn" onclick="syncNow()">立即抓取历史消息</button>
+            <button class="danger" onclick="resetHistoryAll()">重置抓取记录</button>
+          </div>
+          <details>
+            <summary style="cursor:pointer;font-size:12px;color:var(--muted);">高级选项：定时自动补抓（默认 0 关闭）</summary>
+            <div style="margin-top:8px;">
+              <label>定时补抓间隔（分钟，0 = 完全关闭定时翻历史，仅手动触发）</label>
+              <input type="number" id="pollIntervalInput" min="0" value="0" />
+            </div>
+          </details>
         </div>
       </div>
 
@@ -340,6 +368,12 @@
         const wb = document.getElementById('watchBadge');
         wb.textContent = s.daemon.watchLoopActive ? '7×24 实时监听中' : '监听待命';
         wb.className = 'badge ' + (s.daemon.watchLoopActive ? 'ok' : 'warn');
+
+        const lb = document.getElementById('liveModeBadge');
+        if (lb) {
+          lb.textContent = s.daemon.watchLoopActive ? '运行中' : '待命';
+          lb.className = 'badge ' + (s.daemon.watchLoopActive ? 'ok' : 'warn');
+        }
 
         document.getElementById('statUser').textContent = s.user ? (s.user.name + (s.user.username ? ' @' + s.user.username : '')) : '未登录';
         document.getElementById('statWatched').textContent = s.watchedChannelCount;
@@ -540,8 +574,19 @@
 
     async function syncNow() {
       try {
+        await api('/api/watch/config', {
+          method: 'PUT',
+          body: JSON.stringify({
+            watchedChannelIds: Array.from(selectedWatchIds),
+            watchedChannelHistoryLimit: parseInt(document.getElementById('historyLimitInput').value || '50', 10),
+            pollIntervalMinutes: parseInt(document.getElementById('pollIntervalInput').value || '0', 10),
+            watchConcurrency: parseInt(document.getElementById('concurrencyInput').value || '4', 10),
+            watchedChannelAutoDownload: document.getElementById('autoDownloadInput').checked,
+            downloadDirectory: document.getElementById('downloadDirInput').value.trim()
+          })
+        });
         const res = await api('/api/watch/sync-now', { method: 'POST' });
-        toast(res.started ? '已启动后台多频道并发抓取，请查看下方实时日志' : '当前已有抓取任务正在执行中');
+        toast(res.started ? '已按当前配置启动后台历史抓取，请查看下方实时日志' : '当前已有抓取任务正在执行中');
         refreshStatus(); loadLogs();
       } catch (e) { toast(e.message); }
     }

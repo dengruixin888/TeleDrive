@@ -14,10 +14,10 @@ services:
       TELEDRIVE_PORT: "8080"
       TELEDRIVE_DATA_DIR: "/data"
       TELEDRIVE_DOWNLOAD_DIR: "/downloads"
-      # 定时防漏抓巡检间隔（分钟），0 表示关闭定时巡检仅使用 7x24 实时监听
-      TELEDRIVE_POLL_INTERVAL_MINUTES: "30"
-      # 启动连上 Telegram 后是否立即补抓一次历史消息
-      TELEDRIVE_SYNC_ON_START: "true"
+      # 定时补抓间隔（分钟），0 表示关闭定时翻历史（推荐：仅使用7x24实时监听 + 手动抓历史）
+      TELEDRIVE_POLL_INTERVAL_MINUTES: "0"
+      # 启动连上 Telegram 后是否自动触发一次历史抓取（默认 false，完全与实时监听分离）
+      TELEDRIVE_SYNC_ON_START: "false"
       # 可选：直接通过环境变量预置 Telegram API 凭据（也可留空在 Web 面板填写）
       # TELEDRIVE_API_ID: "1234567"
       # TELEDRIVE_API_HASH: "your_api_hash"

@@ -964,37 +964,37 @@ class DesktopTelegramClient(
             TdApi.InputDocument(TdApi.InputFileRemote(remoteFileId), null, false),
             formattedCaption
         )
-        return try {
-            sendContentCopy(chatId, documentContent)
-        } catch (e: TelegramException) {
-            if (!mimeType.startsWith("video/", ignoreCase = true) ||
-                e.isRateLimit ||
-                e.code !in CLIENT_ERROR_CODES
-            ) {
-                throw e
-            }
-            val videoContent = TdApi.InputMessageVideo(
-                TdApi.InputVideo(
-                    TdApi.InputFileRemote(remoteFileId),
-                    null,
-                    null,
-                    0,
-                    intArrayOf(),
-                    0,
-                    0,
-                    0,
-                    true
-                ),
-                formattedCaption,
-                false,
+        if (!mimeType.startsWith("video/", ignoreCase = true)) {
+            return sendContentCopy(chatId, documentContent)
+        }
+        val videoContent = TdApi.InputMessageVideo(
+            TdApi.InputVideo(
+                TdApi.InputFileRemote(remoteFileId),
                 null,
-                false
-            )
+                null,
+                0,
+                intArrayOf(),
+                0,
+                0,
+                0,
+                true
+            ),
+            formattedCaption,
+            false,
+            null,
+            false
+        )
+        return try {
+            sendContentCopy(chatId, videoContent)
+        } catch (videoError: TelegramException) {
+            if (videoError.isRateLimit || videoError.code !in CLIENT_ERROR_CODES) {
+                throw videoError
+            }
             try {
-                sendContentCopy(chatId, videoContent)
-            } catch (videoError: TelegramException) {
-                if (videoError.isRateLimit || videoError.code !in CLIENT_ERROR_CODES) {
-                    throw videoError
+                sendContentCopy(chatId, documentContent)
+            } catch (docError: TelegramException) {
+                if (docError.isRateLimit || docError.code !in CLIENT_ERROR_CODES) {
+                    throw docError
                 }
                 val animationContent = TdApi.InputMessageAnimation(
                     TdApi.InputAnimation(
